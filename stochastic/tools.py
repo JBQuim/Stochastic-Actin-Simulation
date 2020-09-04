@@ -14,7 +14,6 @@ class System:
         :param initial_concs: the initial amount of every species in the system
         :param size: the system size. Used in converting the rate constants to stochastic rate constants
         """
-
         assert len(species_names) == len(initial_concs), 'Must have the same amount of species labels and amounts'
 
         self.names = np.array(species_names)
@@ -30,10 +29,13 @@ class Simulation:
     """
     Implements the logic behind the stochastic simulation of the evolution of the system.
     """
-    def __init__(self, reactions, system, max_it=100):
+    def __init__(self, reactions, system, record_config, max_it=100):
         """
         :param reactions: a list of reaction instances, following the BaseReaction API
         :param system: a system instance holding the state of the simulation
+        :param record_config: a dictionary outlining the settings of _record. Keys are variables names that must be saved
+        from system as the simulation is run. They are saved to the simulation attribute history_[var name]. See _record
+        for more details.
         :param max_it: the max number of iterations before stopping the simulation
         """
         self.reactions = reactions
@@ -41,24 +43,81 @@ class Simulation:
         self.system = system
         self.t = 0
         self.max_it = max_it
-        self.history = np.full((self.max_it + 1, len(system.concs)), np.nan)
-        self.times = np.full(self.max_it + 1, np.nan)
 
-    def _record(self, iteration):
+        self.record_time_length = record_config.pop('_time_length', 5)
+        self.record_dynamic = record_config.pop('_dynamic', False)
+        self.record_config = record_config
+
+        self.times = np.full(self.max_it + 1, np.nan)
+        for var_name, (period, mode) in record_config.items():
+            data_shape = np.shape(getattr(system, var_name))
+            if mode == 'steps':
+                history_shape = (int(self.max_it / period) + 1, *data_shape)
+            elif mode == 'time':
+                history_shape = (int(self.record_time_length / period) + 1, *data_shape)
+            else:
+                raise NotImplementedError('Mode {} not understood. Mode must be one of steps or time.'.format(mode))
+            setattr(self, 'history_' + var_name, np.full(history_shape, np.nan))
+
+    def _record(self, iteration, latest_times):
         """
-        Saves the current state to the simulation for later retrieval. The state of system.concs is saved to self.history
-        and self.times. Behaviour can be extended by subclasses of Simulation to save more information.
-        :param iteration: A number describing the current iterations performed.
-        :return: None
+        Saves the current state to the simulation for later retrieval. The variables saved from self.system are the keys
+        of the dictionary provided when initializing the simulation. They are saved to self.hystory_[var name].
+
+        The value of each entry in the config dictionary should be a tuple, where the first element is the period of the
+        recording and the second whether this is in time or steps. e.g. (2, 'steps') is every two steps and (0.2, 'time')
+        is every 0.2 units of time. Additionally, the value for _time_length is the length of time for which the time
+        parameters are recorded. If _dynamic is True then this is taken only as estimation of the length of the simulation,
+        but data is recorded for the whole duration.
+        :param iteration: The number of iterations performed so far.
+        :latest_times: A dictionary of the time at which each variable was last saved.
+        :return: updated dictionary of latest_times
         """
-        self.history[iteration] = self.system.concs
+
+        # initialize the latest_times dict
+        if iteration == 0:
+            latest_times = dict({})
+            for var_name, (period, mode) in self.record_config.items():
+                if mode == 'time':
+                    latest_times[var_name] = 0
+
         self.times[iteration] = self.t
+        for var_name, (period, mode) in self.record_config.items():
+            data = getattr(self.system, var_name)
+            history_data = getattr(self, 'history_' + var_name)
+            if mode == 'steps':
+                if iteration % period == 0:
+                    index = iteration // period
+                    history_data[index] = data
+            elif mode == 'time':
+                samples_taken = int(latest_times[var_name] / period)
+                new_total_samples = int(self.t / period)
+                if samples_taken == new_total_samples: # if there is no need to record new samples
+                    continue
+                elif new_total_samples >= len(history_data): # if new samples exceed the memory already allocated
+                    if self.record_dynamic:
+                        print('Resizing memory allocation for history_{}'.format(var_name))
+                        length_estimate = int(new_total_samples * max(1.2, self.max_it / iteration))
+                        # add padding only along the first axis, at the end
+                        padding_widths = [(0, length_estimate - samples_taken)] + [(0, 0)] * (history_data.ndim - 1)
+                        history_data = np.pad(history_data, padding_widths, 'constant', constant_values=np.nan)
+                    else:
+                        continue
+                index = np.arange(samples_taken, new_total_samples, 1, dtype=np.int32)
+                history_data[index] = data
+                latest_times[var_name] = self.t
+            setattr(self, 'history_' + var_name, history_data)
+
+        return latest_times
+
+
 
     def _step(self):
         """
         Step the simulation forward according to Gillespie's algorithm.
-        :return: True if the total propensities is 0, otherwise False. Returning True will end the simulation.
+        :return: True if the total of the propensities is 0, otherwise False. Returning True will end the simulation.
         """
+
         propensities = np.array([reaction.get_propensity(self.system) for reaction in self.reactions], dtype=np.float_)
         total_prop = propensities.sum()
 
@@ -74,21 +133,23 @@ class Simulation:
 
     def simulate(self, end_condition=lambda x: False):
         """
-        Modifies the system by repeatedly calling self._step(). Simulation ends when either of self._step() or
-        end_condition(self) return True.
+        Modifies the system by repeatedly calling self._step(). Simulation ends when self._step() or end_condition(self)
+         return True or when maximum iterations are reached.
         :param end_condition: Function that takes in a simulation instance and determines if it should end. If it returns
         True, the simulation ends.
         :return: None
         """
-        self._record(0)
+        record_cache = self._record(0, None)
         for iteration in range(self.max_it):
             if end_condition(self):
                 break
 
             end = self._step()
-            self._record(iteration + 1)
+            record_cache = self._record(iteration + 1, record_cache)
             if end:
                 break
+
+            print(iteration)
 
 
 class BaseReaction(ABC):
@@ -119,52 +180,20 @@ class BaseReaction(ABC):
 
 class ElementaryStep(BaseReaction):
     """
-    Elementary reaction step of zeroth, first or second order. Faster implementation of NthOrderReaction but restricted to
-    smaller reaction orders.
+    Elementary reaction step of any order.
     """
     def __init__(self, reactants, changes, rate_constant):
         """
-        :param reactants: a list of the IDs of the reactants involved in the reaction. If the reaction involves a reactant
-        twice, it should be repeated in the list.
+        :param reactants: the order of the reaction with respect to every species
         :param changes: a list of the change to every species when the reaction takes place
         :param rate_constant: the kinetic rate constant.
         """
-        self.order = len(reactants)
-        self.reactants = reactants
+        self.reactants = np.array(reactants)
         self.changes = changes
         self.rate_constant = rate_constant
+        self.order = self.reactants.sum()
 
         self._check_valid()
-
-    def _check_valid(self):
-        assert self.order in [0, 1, 2], 'Order of reaction has to be 0, 1 or 2'
-
-    def get_propensity(self, system):
-        combinations = np.product(system.concs[self.reactants])
-        if self.order == 2:
-            if self.reactants[0] == self.reactants[1]:
-                # if reaction is first order with respect to same reactant. The permutations are N(N-1). Because N^2 has
-                # been calculated. An excess of N combinations have been counted.
-                combinations -= system.concs[self.reactants[0]]
-
-        return self.rate_constant * combinations * system.size ** (1 - self.order)
-
-    def modify_system(self, system):
-        system.concs += self.changes
-        system.concs[system.concs < 0] = 0
-
-
-class NthOrderReaction(ElementaryStep):
-    """
-    Elementary reaction step of any order.
-    """
-    def __init__(self, *args):
-        """
-        :param args: same as those of ElementaryStep but the reactants argument is now a list with the order of the
-        reaction with respect to every species.
-        """
-        super().__init__(*args)
-        self.order = np.sum(self.reactants)
 
     def _check_valid(self):
         assert len(self.reactants) == len(
@@ -172,4 +201,11 @@ class NthOrderReaction(ElementaryStep):
 
     def get_propensity(self, system):
         combinations = perm(system.concs, self.reactants).prod()
-        return self.rate_constant * combinations * system.size ** (1 - self.order.astype(float))
+        # make sure there are enough reactants for reaction
+        if not (system.concs >= self.reactants).all() or (system.concs + self.changes < 0).any():
+            return 0
+        else:
+            return self.rate_constant * combinations * system.size ** (1 - self.order.astype(float))
+
+    def modify_system(self, system):
+        system.concs += self.changes
