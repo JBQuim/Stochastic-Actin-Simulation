@@ -8,10 +8,11 @@ class System:
     """
     Holds the state of the system. This includes the amount of each species and the species names.
     """
+
     def __init__(self, species_names, initial_concs, size=1):
         """
-        :param species_names: a list of strings of the names of all the species.
-        :param initial_concs: the initial amount of every species in the system
+        :param species_names: list of length S, holding strings of the names of all the species.
+        :param initial_concs: list of length S, holding the initial amount of every species in the system
         :param size: the system size. Used in converting the rate constants to stochastic rate constants
         """
         assert len(species_names) == len(initial_concs), 'Must have the same amount of species labels and amounts'
@@ -29,9 +30,10 @@ class Simulation:
     """
     Implements the logic behind the stochastic simulation of the evolution of the system.
     """
+
     def __init__(self, reactions, system, record_config, max_it=100):
         """
-        :param reactions: a list of reaction instances, following the BaseReaction API
+        :param reactions: a list of length R, holding reaction instances, following the BaseReaction API
         :param system: a system instance holding the state of the simulation
         :param record_config: a dictionary outlining the settings of _record. Keys are variables names that must be saved
         from system as the simulation is run. They are saved to the simulation attribute history_[var name]. See _record
@@ -52,6 +54,7 @@ class Simulation:
         for var_name, (period, mode) in record_config.items():
             data_shape = np.shape(getattr(system, var_name))
             if mode == 'steps':
+                assert isinstance(period, int), 'Period for step must be an integer'
                 history_shape = (int(self.max_it / period) + 1, *data_shape)
             elif mode == 'time':
                 history_shape = (int(self.record_time_length / period) + 1, *data_shape)
@@ -92,9 +95,9 @@ class Simulation:
             elif mode == 'time':
                 samples_taken = int(latest_times[var_name] / period)
                 new_total_samples = int(self.t / period)
-                if samples_taken == new_total_samples: # if there is no need to record new samples
+                if samples_taken == new_total_samples:  # if there is no need to record new samples
                     continue
-                elif new_total_samples >= len(history_data): # if new samples exceed the memory already allocated
+                elif new_total_samples >= len(history_data):  # if new samples exceed the memory already allocated
                     if self.record_dynamic:
                         print('Resizing memory allocation for history_{}'.format(var_name))
                         length_estimate = int(new_total_samples * max(1.2, self.max_it / iteration))
@@ -109,8 +112,6 @@ class Simulation:
             setattr(self, 'history_' + var_name, history_data)
 
         return latest_times
-
-
 
     def _step(self):
         """
@@ -131,17 +132,16 @@ class Simulation:
 
         return False
 
-    def simulate(self, end_condition=lambda x: False):
+    def simulate(self, repeat_func=lambda x: False):
         """
-        Modifies the system by repeatedly calling self._step(). Simulation ends when self._step() or end_condition(self)
+        Modifies the system by repeatedly calling self._step(). Simulation ends when self._step() or repeat_func(self)
          return True or when maximum iterations are reached.
-        :param end_condition: Function that takes in a simulation instance and determines if it should end. If it returns
-        True, the simulation ends.
+        :param repeat_func: Function that is ran every step. It takes the simulation instance as argument. Simulation ends if it returns True.
         :return: None
         """
         record_cache = self._record(0, None)
         for iteration in range(self.max_it):
-            if end_condition(self):
+            if repeat_func(self):
                 break
 
             end = self._step()
@@ -182,10 +182,11 @@ class ElementaryStep(BaseReaction):
     """
     Elementary reaction step of any order.
     """
+
     def __init__(self, reactants, changes, rate_constant):
         """
-        :param reactants: the order of the reaction with respect to every species
-        :param changes: a list of the change to every species when the reaction takes place
+        :param reactants: list of length S, holding the order of the reaction with respect to every species
+        :param changes: list of length S, holding the change to every species when the reaction takes place
         :param rate_constant: the kinetic rate constant.
         """
         self.reactants = np.array(reactants)

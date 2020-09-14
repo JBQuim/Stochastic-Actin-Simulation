@@ -10,12 +10,11 @@ class FilamentSystem(sto.System):
     """
 
     def __init__(self, species_names, initial_concs, state_names, size=1, max_filaments=50, max_length=100,
-                 min_length=4, shrink_factor=2):
+                 min_length=4, shrink_factor=3):
         """
-        :param species_names: a list of strings of the names of all the species.
-        :param initial_concs: the initial amount of every species in the system
-        :param state_names: a list of strings of the names of all the possible states of a filament. Index 0 is no filament,
-        empty, or a variation.
+        :param species_names: list of length S, holding strings of the names of all the species.
+        :param initial_concs: list of length S, holding the initial amount of every species in the system
+        :param state_names: list of length ST, holding strings of the names of all the filament states
         :param size: the system size. Used in converting the rate constants to stochastic rate constants.
         :param max_filaments: the maximum number of filaments at any one time
         :param max_length: the maximum length of a filament
@@ -43,9 +42,9 @@ class FilamentSystem(sto.System):
     def populate(self, filaments, positions=None):
         """
         Populates the system with the given filaments.
-        :params filaments: a list of lists or 2D array with every entry corresponding to the state of a filament at a
-        given point. First dimension must be less than max_filaments and second must be less than max_length.
-        :params positions: a list of equal length as filaments with the starting positions of the strands.
+        :params filaments: a list of lists with dimension N x L with every entry corresponding to the state
+         of a filament at a gien point. N must be less than max_filaments and L must be less than max_length.
+        :params positions: a list of length N, holding the starting positions of the strands.
         :return: None
         """
         filaments = np.array(filaments)
@@ -70,21 +69,15 @@ class FilamentSystem(sto.System):
             assert N == len(positions), 'Number of positions given must match number of filaments given'
             self.positions[:N] = positions
 
-    def modify_volume(self, mode):
+    def shrink(self):
         """
-        Modifies volume when there are too many or too few strands.
-        :params mode: One of 'debug' or 'shrink'. Former clears the filaments and the latter shrinks the volume by
-        shrink_factor.
+        Modifies volume when there are too many strands.
         """
-        if mode == 'debug':
-            self.clear()
-        elif mode == 'shrink':
-            self.size /= self.shrink_factor
-            self.concs //= self.shrink_factor
-            mask = np.random.rand(self.max_filaments) > (1 / self.shrink_factor)
-            self.filaments[mask] = np.nan
-        else:
-            raise NotImplementedError('Mode \'{}\' not available'.format(mode))
+        self.size /= self.shrink_factor
+        self.concs = (self.concs / self.shrink_factor).astype(self.concs.dtype)
+        mask = np.random.rand(self.max_filaments) > (1 / self.shrink_factor)
+        self.filaments[mask] = 0
+        self.positions[mask] = np.nan
 
 
 class NucleateFilament(sto.ElementaryStep):
@@ -95,8 +88,8 @@ class NucleateFilament(sto.ElementaryStep):
     def __init__(self, smallest_filament, reactants, changes, rate_constant, start_pos=0):
         """
         :param smallest_filament: list with the states of the filament when it is created
-        :param reactants: list of the orders with respect to all the reactants.
-        :param changes: list of changes to every species when a nucleation event occurs
+        :param reactants: list of length S, holding the order of the reaction with respect to every species
+        :param changes: list of length S, holding the change to every species when the reaction takes place
         :param rate_constant: rate constant for reaction
         :param start_pos: starting position of the filament
         """
@@ -114,10 +107,10 @@ class NucleateFilament(sto.ElementaryStep):
         fsystem.filaments[empty_slot, (ML - L) // 2:(ML + L) // 2] = self.smallest
         fsystem.positions[empty_slot] = self.start_pos
 
-        if N + 1 == fsystem.max_filaments:
-            fsystem.modify_volume("shrink")
-
         fsystem.concs += self.changes
+
+        if N + 1 == fsystem.max_filaments:
+            fsystem.shrink()
 
 
 class Shortening(sto.BaseReaction):
@@ -126,6 +119,13 @@ class Shortening(sto.BaseReaction):
     """
 
     def __init__(self, end, state, changes, rate_constant, removal_change=None):
+        """
+        :param end: '+' or '-' to remove from the right or left, respectively.
+        :param state: integer corresponding to the state of the tip needed for it to lose a unit
+        :param changes: list of length S, holding the changes to every species when a unit is removed
+        :param rate_constant: rate constant for reaction
+        :param removal_change: list of length S, holding the changes to every species when a whole strand is removed
+        """
         self.end = end
         self.state = state
         self.changes = np.array(changes)
@@ -179,7 +179,17 @@ class Shortening(sto.BaseReaction):
 
 
 class ChangeUnitState(sto.BaseReaction):
+    """
+    Change the state of a filament unit into a different one
+    """
+
     def __init__(self, old_state, new_state, changes, rate_constant):
+        """
+        :param old_state: integer representing the reacting state
+        :param new_state: integer representing the new state
+        :param changes: list of length S, holding the changes to every species when the reaction occurs
+        :param rate_constant: rate constant for reaction
+        """
         self.old_state = old_state
         self.new_state = new_state
         self.changes = np.array(changes)
@@ -208,6 +218,7 @@ class Grow(sto.BaseReaction):
         self.reactants = np.array(reactants)
         self.changes = np.array(changes)
         self.rate_constant = rate_constant
+        self.order = self.reactants.sum() + 1
         self.cache = None
 
         self._check_valid()
@@ -234,7 +245,7 @@ class Grow(sto.BaseReaction):
 
         combinations = perm(fsystem.concs, self.reactants).prod()
         if (fsystem.concs >= self.reactants).all():
-            return self.rate_constant * counts * combinations / fsystem.size
+            return self.rate_constant * counts * combinations * fsystem.size ** (1 - self.order.astype(float))
         else:
             return 0
 
@@ -252,7 +263,7 @@ class Grow(sto.BaseReaction):
             fsystem.positions[selected_strand_key] -= 1
             tail_pos = keys[selected_strand_key] - 1
             if tail_pos == -1:
-                L = np.sum(fsystem.filaments[selected_strand_key])
+                L = np.sum(fsystem.filaments[selected_strand_key] != 0)
                 shift = int((fsystem.max_length - L + 1) // 2)
 
         fsystem.filaments[selected_strand_key] = np.roll(fsystem.filaments[selected_strand_key], shift)
