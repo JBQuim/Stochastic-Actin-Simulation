@@ -1,5 +1,7 @@
 import numpy as np
 import stochastic.tools as sto
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 from random import choice
 from scipy.special import perm
 
@@ -298,3 +300,104 @@ def process_positions(positions, times):
             pos_histories.append(slot_history[s:e + 1])
             time_histories.append(times[s:e + 1])
     return pos_histories, time_histories
+
+
+def update_alphas(time, lines, alpha1, alpha2):
+    for line in lines:
+        xdata = line.get_xdata(orig=True)
+        start_time, end_time = xdata[0], xdata[-1]
+        alpha = alpha1 if start_time <= time <= end_time else alpha2
+        line.set_alpha(alpha)
+
+
+def produce_ani_frames(path, history_times, history_concs, history_size, sampling_rate, names, history_filaments,
+                       history_positions):
+    fig = plt.figure(constrained_layout=True)
+    gs = fig.add_gridspec(5, 4)
+
+    ax1 = fig.add_subplot(gs[0, :2])
+    ax2 = fig.add_subplot(gs[1, :2])
+    ax3 = fig.add_subplot(gs[2:, :2])
+    ax4 = fig.add_subplot(gs[:, 2:])
+
+    ax1.plot(history_times[::sampling_rate[0]], history_concs[:, 0] / history_size, lw=0.8)
+    ax2.plot(history_times[::sampling_rate[0]], history_concs[:, 1] / history_size, lw=0.8)
+    ax1.set_ylabel('Concentration')
+    ax2.set_ylabel('Concentration')
+    ax1.set_title(names[0])
+    ax2.set_title(names[1])
+
+    positions, times = process_positions(history_positions, history_times)
+    color = plt.rcParams['axes.prop_cycle'].by_key()['color'][0]
+    for pos, t in zip(positions, times):
+        ax3.plot(t, pos, color=color, lw=0.8)
+    ax3.set_ylabel('Displacement from origin')
+    ax3.set_xlabel('Time')
+    ax3.set_title('Strand positions')
+    update_alphas(0, ax3.lines, 0.6, 0.2)
+
+    ims = []
+    ax1.axvline(0.05, color='black', alpha=0.5)
+    ax2.axvline(0.05, color='black', alpha=0.5)
+    ax3.axvline(0.05, color='black', alpha=0.5)
+    coords = np.array([[0.05, 0], [0, 1]])
+    for i in range(1228, len(history_filaments)):
+        print(i)
+        frame = history_filaments[i]
+        time = (i + 1) * sampling_rate[1]
+        if np.isnan(frame).all():
+            break
+        ax4.imshow(frame.T[::-1], animated=True)
+        coords[0] = time
+        ax1.lines[-1].set_data(coords)
+        ax2.lines[-1].set_data(coords)
+        ax3.lines[-1].set_data(coords)
+        plt.savefig(path + str(i))
+        plt.sca(ax4)
+        plt.cla()
+
+        update_alphas(time, ax3.lines[:-1], 0.6, 0.15)
+        # ims.append([im])
+    ani = animation.ArtistAnimation(fig, ims, interval=25)
+
+    writer = animation.PillowWriter(fps=30)
+    # ani.save('myAnimation2.gif', writer=writer)
+    print("done")
+
+    plt.figure()
+    plt.plot(history_times[::sampling_rate[0]], history_size)
+    plt.show()
+
+
+def preview_graphs(history_times, history_concs, history_size, sampling_rate, names, history_filaments,
+                   history_positions):
+    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True)
+
+    ax1.plot(history_times[::sampling_rate[0]], history_concs[:, 0] / history_size, lw=0.8)
+    ax2.plot(history_times[::sampling_rate[0]], history_concs[:, 1] / history_size, lw=0.8)
+    ax1.set_ylabel('Concentration')
+    ax2.set_ylabel('Concentration')
+    plt.show()
+
+    plt.figure()
+    positions, times = process_positions(history_positions, history_times)
+    color = plt.rcParams['axes.prop_cycle'].by_key()['color'][0]
+    for pos, t in zip(positions, times):
+        plt.plot(t, pos, color=color, alpha=0.2)
+    plt.xlabel('Displacement from origin')
+    plt.ylabel('Time')
+    plt.show()
+
+    plt.figure()
+    plt.plot(history_times[::sampling_rate[0]], history_size)
+
+    fig = plt.figure()
+    ims = []
+    for frame in history_filaments:
+        print(len(ims))
+        if np.isnan(frame).all():
+            break
+        im = plt.imshow(frame.T[::-1], animated=True)
+        ims.append([im])
+    ani = animation.ArtistAnimation(fig, ims, interval=50)
+    plt.show()
