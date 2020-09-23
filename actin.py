@@ -1,8 +1,6 @@
 import stochastic.tools as sto
 import stochastic.filaments as fsto
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
-import numpy as np
+import stochastic.data_process as dpro
 
 sys = fsto.FilamentSystem(['Actin', 'Active strands'],
                           [4000, 0], ['Empty', 'New', 'Aged'],
@@ -29,11 +27,9 @@ record_config = {
     '_time_length': 8000,
     '_dynamic': True
 }
-sim = sto.Simulation(reactions, sys, record_config, max_it=80000)
+sim = sto.Simulation(reactions, sys, record_config, max_it=8000)
 sim.simulate()
-# fsto.preview_graphs(sim.times, sim.history_concs, sim.history_size, sampling_rate, sim.system.names,
-#                    sim.history_filaments, sim.history_positions)
-# fsto.produce_ani_frames('Data/ani', sim.times, sim.history_concs, sim.history_size, sampling_rate,
-# sim.system.names, sim.history_filaments, sim.history_positions)
-# np.savez('Data/actin', sim.times,
-# sim.history_concs, sim.history_size, sampling_rate, sim.system.names, sim.history_filaments, sim.history_positions)
+# dpro.preview_graphs(sim.times, sampling_rate, sim.system.names, sim.history)
+# dpro.produce_ani_frames('Data/', sim.times, sampling_rate, sim.system.names, sim.history)
+dpro.save('Data/actin', sim.times, sampling_rate, sim.system.names, sim.history)
+dpro.preview_graphs(*dpro.load('Data/actin'))

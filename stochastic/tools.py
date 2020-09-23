@@ -49,6 +49,7 @@ class Simulation:
         self.record_time_length = record_config.pop('_time_length', 5)
         self.record_dynamic = record_config.pop('_dynamic', False)
         self.record_config = record_config
+        self.history = dict()
 
         self.times = np.full(self.max_it + 1, np.nan)
         for var_name, (period, mode) in record_config.items():
@@ -60,7 +61,7 @@ class Simulation:
                 history_shape = (int(self.record_time_length / period) + 1, *data_shape)
             else:
                 raise NotImplementedError('Mode {} not understood. Mode must be one of steps or time.'.format(mode))
-            setattr(self, 'history_' + var_name, np.full(history_shape, np.nan))
+            self.history[var_name] = np.full(history_shape, np.nan)
 
     def _record(self, iteration, latest_times):
         """
@@ -87,7 +88,7 @@ class Simulation:
         self.times[iteration] = self.t
         for var_name, (period, mode) in self.record_config.items():
             data = getattr(self.system, var_name)
-            history_data = getattr(self, 'history_' + var_name)
+            history_data = self.history[var_name]
             if mode == 'steps':
                 if iteration % period == 0:
                     index = iteration // period
@@ -109,7 +110,7 @@ class Simulation:
                 index = np.arange(samples_taken, new_total_samples, 1, dtype=np.int32)
                 history_data[index] = data
                 latest_times[var_name] = self.t
-            setattr(self, 'history_' + var_name, history_data)
+            self.history[var_name] = history_data
 
         return latest_times
 
@@ -198,7 +199,8 @@ class ElementaryStep(BaseReaction):
 
     def _check_valid(self):
         assert len(self.reactants) == len(
-            self.changes), 'List of orders with respect to every species must be the same length as the changes in species'
+            self.changes), 'List of orders with respect to every species must be the same length as the changes in ' \
+                           'species '
 
     def get_propensity(self, system):
         combinations = perm(system.concs, self.reactants).prod()
